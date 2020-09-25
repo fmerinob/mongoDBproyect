@@ -1,0 +1,252 @@
+#Conexión a mongo
+import pymongo
+from pymongo import MongoClient
+import matplotlib.pyplot as plt
+import numpy as np
+client = MongoClient('localhost', 27017)
+
+#Creación de base de datos y colección desde .csv
+import csv
+
+#Se lee el archivo
+csvfile = open('nucs.csv', 'r')
+reader = csv.DictReader( csvfile )
+client=MongoClient() 
+#se crea la base
+db=client.nuc_expl
+
+#se crea la colección o se elimina en caso de existir
+db.nucs.drop()
+
+#asignación de los nombres de los atributos
+header= ["_id","latitude","longitude","depth","mb","name","source","Country","datetime","max_yield","medium","confirmation","salvo"]
+
+#para que conserven su tipo es necesario agregarlos "manualmente", de otro moido serán
+#agregados todos como strings
+for each in reader:
+    #Se asignaron de columna en columna para regular los tipos de datos
+    row={}
+    row["_id"]=int(each["_id"])
+    row["latitude"]=float(each["latitude"])
+    row["longitude"]=float(each["longitude"])
+    
+    #Los siguientes ifs manejan los nulos de las tablas para que no sean agregados a los docs
+    if each["depth"] != 'NA':
+        row["depth"]=float(each["depth"])  
+    if each["mb"] != 'NA':
+        row["mb"]=float(each["mb"])
+    if each["name"] != '-':
+        row["name"]=each["name"]
+        
+    row["source"]=each["source"]
+    row["Country"]=each["Country"]
+    row["datetime"]= each["datetime"]
+    row["max_yield"]=float(each["max_yield"])
+    row["medium"]=each["medium"]
+    row["confirmation"]=each["confirmation"]
+    row["salvo"]=int(each["salvo"])
+    
+    #se inserta el documento recién creado
+    db.nucs.insert_one(row)
+
+#Asignación de la base de datos a variable global
+#se asigna para poder llamarla en los querys posteriores
+db=client.nuc_expl
+
+#consultas
+#para todas las consultas se declara un pipeline, que incluye las diferentes capas de agregado
+#despues se llama con la misma linea para vaciar los resultados en una lista
+#finalmente se grafican con metodos declarados al pie del código
+
+#Cantidad de bombas por pais por confirmation
+
+pipeline = [
+    {
+        '$group': {
+            '_id': {
+                'Country': '$Country', 
+                'Confirmacion': '$confirmation'
+            }, 
+            'total': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$sort': {
+            'total': -1
+        }
+    }
+]
+res= list(db.nucs.aggregate(pipeline))
+print(res)
+
+#Yield es el valor que define el rendimiento del arma nuclear y se mide en equivalente de TNT.
+#En esta base de datos el valor significa kilotonne TNT, es decir, miles de toneladas de TNT.
+
+#Promedio de max_yield de bombas por pais de mayor a menor
+pipeline = [
+    {
+        '$group': {
+            '_id': '$Country', 
+            'promedio': {
+                '$avg': {
+                    '$sum': '$max_yield'
+                }
+            }
+        }
+    }, {
+        '$sort': {
+            'promedio': -1
+        }
+    }
+]
+res= list(db.nucs.aggregate(pipeline))
+#están de mayor a menor desde el origen hacia arriba
+grafB(res,"_id",'promedio', 'País', 'Promedio de rendimiento','Rendimiento promedio')
+
+#Yield promedio de bombas de cada pais por medio
+pipeline = [
+    {
+        '$group': {
+            '_id': {
+                'Country': '$Country', 
+                'Confirmacion': '$confirmation'
+            }, 
+            'total': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$sort': {
+            'total': -1
+        }
+    }
+]
+res= list(db.nucs.aggregate(pipeline))
+print(res)
+
+#Yield total por pais
+pipeline = [
+    {
+        '$group': {
+            '_id': '$Country', 
+            'total_danio': {
+                '$sum': '$max_yield'
+            }
+        }
+    }, {
+        '$sort': {
+            'total_danio': -1
+        }
+    }
+]
+res= list(db.nucs.aggregate(pipeline))
+graf(res,"_id",'total_danio','País','Rendimiento total',"Rendimiento por país")
+
+#Total detonaciones por año
+pipeline = [
+    {
+        '$group': {
+            '_id': {
+                '$year': {
+                    '$dateFromString': {
+                        'dateString': '$datetime'
+                    }
+                }
+            }, 
+            'total': {
+                '$sum': 1
+            }
+        }
+    }, {
+        '$sort': {
+            'total': -1
+        }
+    }
+]
+res= list(db.nucs.aggregate(pipeline))
+grafBarra(res,"_id",'total', 'Año', 'Explosiones totales','Detonaciones por año')
+
+#pruebas que fueron más "explosivas" (tuvieron un "yield" más alto) que "little boy"
+for doc in db.nucs.find({ 'max_yield': {'$gt': 18} }, { "Country": 1, "datetime": 1 } ):
+    print(doc)
+
+#mb máximo por país de menor a mayor
+pipeline = [
+    {
+        '$group': {
+            '_id': '$Country', 
+            'maximo': {
+                '$max': '$mb'
+            }
+        }
+    }, {
+        '$sort': {
+            'maximo': -1
+        }
+    }
+]
+res= list(db.nucs.aggregate(pipeline))
+graf(res,"_id",'maximo', 'País', 'MB','Promedio del sesgo')
+
+#Funciones de graficado
+#los 3 métodos reciben una lista, las claves para accederla y los nombres de ejes y graficas.
+#de la lista se vacían los datos en arreglos paralelos
+#finalmente se grafica
+
+
+#gráfica de línea
+def graf(lista,x,y,nomx,nomy,titulo):
+    #vaciado de datos en arreglos
+    varx=[]
+    vary=[]
+    for each in lista:
+        varx.append(each[x])
+        vary.append(each[y])
+    
+    #graficado
+    plt.plot(varx,vary)
+    plt.xlabel(nomx)
+    plt.ylabel(nomy)
+    plt.title(titulo)
+    plt.show()
+
+    
+#gráfica de barras verticales
+def grafBarra(lista,x,y,nomx,nomy,titulo):
+    #vaciado de datos en arreglos
+    varx=[]
+    vary=[]
+    for each in lista:
+        varx.append(each[x])
+        vary.append(each[y])
+    
+    #graficado
+    plt.bar(varx, vary, align='center', alpha=0.5)
+    plt.xlabel(nomx)
+    plt.ylabel(nomy)
+    plt.title(titulo)
+    plt.show()
+
+#gráfica de barras horizontales con etiquetas de valores por barra    
+def grafB(lista,x,y,nomx,nomy,titulo):
+    #vaciado de datos en arreglos
+    varx=[]
+    vary=[]
+    for each in lista:
+        varx.append(each[x])
+        vary.append(each[y])
+    
+    #graficado
+    fig, ax = plt.subplots()    
+    width = 0.75 # ancho de las barras 
+    ind = np.arange(len(vary))  # la localización de las barras en x
+    ax.barh(ind, vary, width)
+    ax.set_yticks(ind+width/2)
+    ax.set_yticklabels(varx, minor=False)
+    plt.title(titulo)
+    plt.xlabel(nomx)
+    plt.ylabel(nomy)
+    for i, v in enumerate(vary):
+        ax.text(v + 3, i + .25, str(v), color='purple', fontweight='bold')
+    plt.show()
